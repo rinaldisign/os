@@ -9,23 +9,23 @@
 // ============================================================
 
 export const site = {
-  title: "Sketchbook Tools",
-  hint: "geser untuk memutar · ketuk kartu untuk buka Threads",
+  title: "Opensource Tools",
+  hint: "Opensource Tools by Rinaldisign",
 };
 
 export const cards = [
   {
-    name: "Pensil Pintar",
-    photo: "assets/tool-1.svg",
-    threads: "https://www.threads.net/@instagram",
+    name: "GRABBER",
+    photo: "assets/tool-1.jpg",
+    threads: "https://www.threads.com/share/BmMohARefc/",
     description:
-      "Contoh tools untuk mencatat ide dengan cepat. Ganti teks ini dengan keterangan tools kamu.",
+      "Tools untuk mendownload file video dari website apapun, powerfull menembus iklan, prinsipnya selama ada video di page itu, maka bisa di download, mencari dan mendownload file video otomatis, dan auto convert ke mp4.",
   },
   {
-    name: "Buku Doodle",
-    photo: "assets/tool-2.svg",
-    threads: "https://www.threads.net/@threads",
+    name: "ATM",
+    photo: "assets/tool-2.jpg",
+    threads: "https://www.threads.com/share/EAb6nVgyh/",
     description:
-      "Contoh kedua: tempat menyimpan coretan, sketsa, dan rencana kecil sebelum jadi proyek besar.",
+      "untuk ATM (amati tiru modifikasi) desain website, outputnya .md / .zip yang bisa dijadikan referensi untuk vibe coding di Claude. pakai ini dan ucapkan selamat tinggal untuk kata AI Slop.",
   },
 ];
