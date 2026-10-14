@@ -34,13 +34,55 @@ const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 /* ---------- latar kertas sketsa ---------- */
 const bgMat = new THREE.ShaderMaterial({
   depthTest: false, depthWrite: false,
-  uniforms: { uRes: { value: new THREE.Vector2(1, 1) }, uTime: { value: 0 }, uMouse: { value: new THREE.Vector2() }, uShift: { value: 0 } },
+  uniforms: {
+    uRes: { value: new THREE.Vector2(1, 1) }, uTime: { value: 0 }, uMouse: { value: new THREE.Vector2() }, uShift: { value: 0 },
+    uBA: { value: Array.from({ length: 3 }, () => new THREE.Vector4()) },   // x, y, radius, char
+    uBB: { value: Array.from({ length: 3 }, () => new THREE.Vector4()) }    // ember, seed
+  },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`,
   fragmentShader: `
-    uniform vec2 uRes, uMouse; uniform float uTime, uShift; varying vec2 vUv;
+    uniform vec2 uRes, uMouse; uniform float uTime, uShift; uniform vec4 uBA[3]; uniform vec4 uBB[3]; varying vec2 vUv;
     float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
       return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+    float fbm(vec2 p){ float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * n(p); p = p * 2.03 + 17.1; a *= .5; } return s; }
+
+    // kertas terbakar: halo gosong coklat -> tepi hitam -> bara menyala -> arang
+    vec3 burn(vec3 col, vec2 q){
+      for (int i = 0; i < 3; i++) {
+        vec4 A = uBA[i]; vec4 B = uBB[i];
+        if (A.w < .003) continue;
+        float r = max(A.z, .001);
+        vec2 d = q - A.xy; float dist = length(d);
+        if (dist > r * 1.8) continue;
+        float k = A.w, ember = B.x;
+        float nz  = fbm(q * 5.5 + B.y + vec2(0., uTime * .10));     // bentuk tepi organik
+        float nz2 = fbm(q * 20. + B.y * 3.);                        // butiran abu
+        float e = dist + (nz - .5) * r * .62;
+        float front = r * .78;
+        float ed = e - front;
+
+        float halo = (1. - smoothstep(front, r * 1.5, e)) * (.6 + .4 * nz2);
+        col = mix(col, col * vec3(.66, .50, .33), halo * .9 * k);               // kertas menguning/coklat
+        float rim = 1. - smoothstep(0., r * .2, ed);
+        col = mix(col, vec3(.20, .11, .05), rim * smoothstep(-r * .05, 0., ed + r * .02) * .92 * k);  // tepi gosong
+
+        float ch = 1. - smoothstep(-r * .035, r * .01, ed);
+        vec3 charC = vec3(.050, .042, .038) + nz2 * .06 + smoothstep(.68, .9, nz2) * vec3(.16, .15, .14) * (1. - ember * .6);
+        col = mix(col, charC, ch * k);                                           // arang
+
+        // bara
+        float flick = .65 + .55 * fbm(q * 24. + vec2(uTime * 1.3, -uTime * .9) + B.y);
+        float line = exp(-pow((ed + r * .035) / (r * .06), 2.));
+        float inner = exp(-max(-ed, 0.) / (r * .20)) * step(ed, 0.) * .35;
+        float g = (line + inner * smoothstep(.45, .8, nz2)) * flick * ember;
+        float sparks = smoothstep(.74, .92, fbm(q * 34. + B.y * 5. + uTime * .25)) * ch * exp(-max(-ed, 0.) / (r * .35)) * ember;
+        vec3 hot = mix(vec3(1., .30, .04), vec3(1., .80, .35), clamp(g * g, 0., 1.));
+        col += hot * clamp(g * 1.25 + sparks * .9, 0., 1.4) * k;
+        col += vec3(1., .45, .12) * exp(-max(ed, 0.) / (r * .16)) * (1. - smoothstep(0., r * .5, ed)) * .16 * ember * k;  // cahaya pendar
+      }
+      return col;
+    }
     void main(){
       vec2 uv = vUv;
       vec2 p = (uv - .5) * uRes / min(uRes.x, uRes.y);
@@ -55,7 +97,8 @@ const bgMat = new THREE.ShaderMaterial({
       float hd = abs(fract((p.x + p.y) * 38. + n(p * 6.) * .8) - .5);   // arsiran di pojok
       float corner = smoothstep(.62, 1.15, length(uv - .5) * 1.5);
       col -= smoothstep(.40, .5, hd) * corner * .14 * smoothstep(.2, .7, n(p * 9.));
-      gl_FragColor = vec4(col, 1.);
+      col = burn(col, (uv - .5) * uRes / min(uRes.x, uRes.y));
+      gl_FragColor = vec4(clamp(col, 0., 1.), 1.);
     }`
 });
 bgScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat));
@@ -253,6 +296,131 @@ const smokeMat = new THREE.ShaderMaterial({
 });
 const smoke = new THREE.Points(smokeGeo, smokeMat); smoke.frustumCulled = false; scene.add(smoke);
 
+/* ---------- efek kertas terbakar (sentuh di luar kartu) ---------- */
+const MAXB = 3;
+const burns = Array.from({ length: MAXB }, () => ({ on: false, held: false, id: -1, x: 0, y: 0, sx: 0, sy: 0, t: 0, r: 0, k: 0, ember: 0, seed: 0, acc: 0, sacc: 0 }));
+const burnMaxR = () => Math.min(Math.max(Math.min(innerWidth, innerHeight) * .42, 120), 230);
+const sstep01 = x => x * x * (3 - 2 * x);
+
+// partikel asap & percikan: quad yang diperbarui di CPU, digambar di atas segalanya
+const MAXP = 240;
+const P = Array.from({ length: MAXP }, () => ({ live: false }));
+const fxPos = new Float32Array(MAXP * 4 * 3), fxUv = new Float32Array(MAXP * 4 * 2), fxData = new Float32Array(MAXP * 4 * 4);
+const fxIdx = new Uint16Array(MAXP * 6);
+for (let i = 0; i < MAXP; i++) {
+  fxUv.set([0, 0, 1, 0, 1, 1, 0, 1], i * 8);
+  const v = i * 4; fxIdx.set([v, v + 1, v + 2, v, v + 2, v + 3], i * 6);
+}
+const fxGeo = new THREE.BufferGeometry();
+fxGeo.setAttribute('position', new THREE.BufferAttribute(fxPos, 3).setUsage(THREE.DynamicDrawUsage));
+fxGeo.setAttribute('aUv', new THREE.BufferAttribute(fxUv, 2));
+fxGeo.setAttribute('aData', new THREE.BufferAttribute(fxData, 4).setUsage(THREE.DynamicDrawUsage));
+fxGeo.setIndex(new THREE.BufferAttribute(fxIdx, 1));
+const fxMat = new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  uniforms: { uTime: { value: 0 } },
+  vertexShader: `attribute vec2 aUv; attribute vec4 aData; varying vec2 vUv; varying vec4 vD;
+    void main(){ vUv = aUv; vD = aData; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec4 vD; uniform float uTime;
+    float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+      return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+    void main(){
+      vec2 c = vUv * 2. - 1.; float d = length(c);
+      if (d > 1.) discard;
+      if (vD.w > .5) {                                   // percikan bara
+        float a = 1. - d; a *= a;
+        vec3 col = mix(vec3(1., .32, .05), vec3(1., .85, .45), a * a);
+        gl_FragColor = vec4(col, clamp(a * 1.6, 0., 1.) * vD.x); return;
+      }
+      float w = n(c * 2.1 + vD.z * 13. + uTime * .12) * .6 + n(c * 4.6 - vD.z * 7.) * .28;
+      d += (w - .42) * .55;                              // tepi asap berawan
+      float a = smoothstep(1., .1, d);
+      a = a * a * (3. - 2. * a);
+      vec3 col = mix(vec3(.13, .115, .105), vec3(.62, .62, .64), vD.y);
+      gl_FragColor = vec4(col, a * vD.x);
+    }`
+});
+const fxMesh = new THREE.Mesh(fxGeo, fxMat); fxMesh.frustumCulled = false;
+const fxScene = new THREE.Scene(); fxScene.add(fxMesh);
+const fxCam = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+function spawnP(b, spark) {
+  const p = P.find(q => !q.live); if (!p) return;
+  const sc = burnMaxR() / 170, a = Math.random() * Math.PI * 2, rad = Math.sqrt(Math.random()) * Math.max(b.r, 20) * (spark ? .85 : .55);
+  p.live = true; p.spark = spark; p.age = 0; p.seed = Math.random();
+  p.x = b.sx + Math.cos(a) * rad; p.y = b.sy + Math.sin(a) * rad;       // px layar (y ke bawah)
+  p.rot = Math.random() * 6.283; p.spin = (Math.random() - .5) * .5;
+  if (spark) { p.life = .9 + Math.random() * 1.1; p.vx = (Math.random() - .5) * 40; p.vy = -(40 + Math.random() * 70); p.s0 = (5 + Math.random() * 5) * Math.max(sc, .7); p.s1 = p.s0 * .5; p.base = 1; }
+  else { p.life = 2.4 + Math.random() * 1.6; p.vx = (Math.random() - .5) * 16; p.vy = -(20 + Math.random() * 34) * sc; p.s0 = (24 + Math.random() * 22) * sc; p.s1 = (95 + Math.random() * 60) * sc; p.base = .26 + Math.random() * .1; }
+}
+
+function updateFx(dt, time) {
+  const maxR = burnMaxR(), H = innerHeight;
+  for (const b of burns) {
+    if (!b.on) continue;
+    if (b.held) {
+      b.t += dt;
+      b.sx += (b.x - b.sx) * (1 - Math.exp(-14 * dt)); b.sy += (b.y - b.sy) * (1 - Math.exp(-14 * dt));
+      b.r += (maxR * (1 - Math.exp(-b.t * 1.5)) - b.r) * (1 - Math.exp(-9 * dt));
+      b.k += (1 - b.k) * (1 - Math.exp(-6 * dt));
+      b.ember += (1 - b.ember) * (1 - Math.exp(-5 * dt));
+    } else {                                              // dilepas: perlahan padam & memudar
+      b.k *= Math.exp(-1.0 * dt); b.ember *= Math.exp(-2.4 * dt); b.r *= Math.exp(-.06 * dt);
+      if (b.k < .02) { b.on = false; b.k = 0; continue; }
+    }
+    b.acc += (b.held ? 13 + 12 * Math.min(b.t / 1.5, 1) : 22 * b.ember + 6 * b.k) * dt;
+    while (b.acc >= 1) { b.acc -= 1; spawnP(b, false); }
+    b.sacc += 5 * b.ember * dt;
+    while (b.sacc >= 1) { b.sacc -= 1; spawnP(b, true); }
+  }
+  // uniform shader
+  const ua = bgMat.uniforms.uBA.value, ub = bgMat.uniforms.uBB.value, w = innerWidth, h = innerHeight, m = Math.min(w, h);
+  burns.forEach((b, i) => {
+    if (!b.on) { ua[i].w = 0; ub[i].x = 0; return; }
+    ua[i].set((b.sx / w - .5) * w / m, (.5 - b.sy / h) * h / m, b.r / m, sstep01(Math.min(b.k, 1)));
+    ub[i].set(b.ember, b.seed, 0, 0);
+  });
+  // partikel
+  let pi = 0;
+  for (let i = 0; i < MAXP; i++) {
+    const p = P[i], o = i * 12, od = i * 16;
+    if (p.live) {
+      p.age += dt; const t = p.age / p.life;
+      if (t >= 1) p.live = false;
+      else {
+        p.vx += Math.sin(time * .9 + p.seed * 6.3) * 9 * dt * (p.spark ? 2 : 1);
+        p.vy *= Math.exp(-(p.spark ? .6 : .22) * dt);
+        p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.spin * dt;
+        const size = p.s0 + (p.s1 - p.s0) * (p.spark ? t : 1 - Math.pow(1 - t, 2));
+        const env = (p.spark ? 1 : Math.min(t / .14, 1)) * Math.pow(1 - t, p.spark ? 1.2 : 1.6);
+        const hs = size / 2, cr = Math.cos(p.rot), sr = Math.sin(p.rot), yy = H - p.y;
+        const cs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+        for (let k = 0; k < 4; k++) {
+          const ox = cs[k][0] * hs, oy = cs[k][1] * hs;
+          fxPos[o + k * 3] = p.x + ox * cr - oy * sr; fxPos[o + k * 3 + 1] = yy + ox * sr + oy * cr; fxPos[o + k * 3 + 2] = 0;
+          fxData[od + k * 4] = env * p.base; fxData[od + k * 4 + 1] = Math.pow(t, .7); fxData[od + k * 4 + 2] = p.seed; fxData[od + k * 4 + 3] = p.spark ? 1 : 0;
+        }
+        pi++; continue;
+      }
+    }
+    fxPos.fill(0, o, o + 12); fxData.fill(0, od, od + 16);   // quad mati: degenerate
+  }
+  fxGeo.attributes.position.needsUpdate = true; fxGeo.attributes.aData.needsUpdate = true;
+  fxMat.uniforms.uTime.value = time;
+}
+
+function burnStart(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  let b = burns.find(q => !q.on) || burns.reduce((a, q) => (q.held || a.held ? (q.held ? a : q) : (q.k < a.k ? q : a)));
+  if (b.held) return;
+  Object.assign(b, { on: true, held: true, id: e.pointerId, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: 0, r: 6, k: 0, ember: 0, seed: Math.random() * 40, acc: 0, sacc: 0 });
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+}
+function burnMove(e) { for (const b of burns) if (b.held && b.id === e.pointerId) { b.x = e.clientX; b.y = e.clientY; } }
+function burnEnd(e) { for (const b of burns) if (b.held && b.id === e.pointerId) { b.held = false; b.id = -1; } }
+
 /* ---------- ukuran layar ---------- */
 let dist = 8;
 function resize() {
@@ -264,6 +432,7 @@ function resize() {
   dist = Math.max(8, (CW * 1.4) / (2 * t * camera.aspect), (CH * 1.4) / (2 * t));
   camera.updateProjectionMatrix();
   bgMat.uniforms.uRes.value.set(w, h);
+  fxCam.right = w; fxCam.top = h; fxCam.updateProjectionMatrix();
   smokeMat.uniforms.uScale.value = renderer.domElement.height / (2 * t);
 }
 addEventListener('resize', resize); resize();
@@ -287,12 +456,14 @@ function pick(ev) {
 const dragK = () => 1 / (Math.min(innerWidth, 900) * 0.3);
 
 canvas.addEventListener('pointerdown', e => {
+  if (!pick(e)) burnStart(e);                // sentuh di luar kartu -> kertas terbakar
   if (drag) return;
   canvas.setPointerCapture(e.pointerId);
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), start: state.target, moved: 0, lastX: e.clientX };
   state.rate = 18; vel = 0; hintEl.classList.add('gone');
 });
 canvas.addEventListener('pointermove', e => {
+  burnMove(e);
   mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   if (drag && e.pointerId === drag.id) {
     const dx = e.clientX - drag.x; drag.moved = Math.max(drag.moved, Math.hypot(dx, e.clientY - drag.y));
@@ -321,6 +492,9 @@ function release(e) {
 }
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('pointerup', burnEnd);
+canvas.addEventListener('pointercancel', burnEnd);
+canvas.addEventListener('lostpointercapture', burnEnd);
 canvas.addEventListener('wheel', e => {
   e.preventDefault(); hintEl.classList.add('gone');
   const now = performance.now(); if (now < wheelLock) return;
@@ -371,11 +545,14 @@ function frame() {
   bgMat.uniforms.uTime.value = time;
   bgMat.uniforms.uMouse.value.copy(mouseS);
   bgMat.uniforms.uShift.value = state.cur;
+  updateFx(dt, time);
 
   renderer.clear();
   renderer.render(bgScene, bgCam);
   renderer.clearDepth();
   renderer.render(scene, camera);
+  renderer.clearDepth();
+  renderer.render(fxScene, fxCam);
   requestAnimationFrame(frame);
 }
 
