@@ -28,4 +28,11 @@ export const cards = [
     description:
       "untuk ATM (amati tiru modifikasi) desain website, outputnya .md / .zip yang bisa dijadikan referensi untuk vibe coding di Claude. pakai ini dan ucapkan selamat tinggal untuk kata AI Slop.",
   },
+  {
+    name: "ArtCraft Hub",
+    photo: "assets/tool-3.jpg",
+    threads: "https://rinaldisign.com/craft/",
+    description:
+      "Kumpulan project Artcraft dalam 1 halaman, semua opensource dan bisa langsung di jalankan di browser.",
+  },
 ];
